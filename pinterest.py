@@ -8,79 +8,66 @@ import cookielib
 import cStringIO
 import gzip
 import sys
+import json
 
 class Pinterest(object):
 
-    def __init__(self):
-        self.cookieJar           = None
+    def __init__(self,cookie=None):
+        self.cookieJar           = cookie
         self.csrfmiddlewaretoken = None
-        self._ch                 = None
         self.http_timeout        = 15
         self.boards              = {}
+        
+    def getCookies(self):
+        return self.cookieJar
         
     def login(self,login,password):
         url = 'https://pinterest.com/login/'
         try:
-            res = self.request(url)
+            res,headers,cookies = self.request(url)
         except Exception as e:
-            print e
-            return False
+            raise NotLogged(e)
         
-        csrfmiddlewaretoken = re.findall(r"<input type='hidden' name='csrfmiddlewaretoken' value='([^']+)'",res)[0]
-        _ch                 = re.findall(r"<input type='hidden' name='_ch' value='([^']+)'",res)[0]
-        self.csrfmiddlewaretoken = csrfmiddlewaretoken
-        self._ch                 = _ch
         post_data = urllib.urlencode({
-            'email':login,
-            'password':password,
-            '_ch':_ch,
-            'csrfmiddlewaretoken':csrfmiddlewaretoken,
-            'next':'/'
+            'source_url':'/login/',
+            'data':json.dumps({"options":{"username_or_email":login,"password":password},"context":{"app_version":"62fcc23","https_exp":False}}),
+            'module_path':'App()>LoginPage()>Login()>Button(class_name=primary, text=Log in, type=submit, size=large)'
         }) 
-        res = self.request(url,post_data,referrer='https://pinterest.com/login/')
-        if 'window.userIsAuthenticated = true' in res:
+        res,headers,cookies = self.request('http://www.pinterest.com/resource/UserSessionResource/create/',post_data,referrer='https://pinterest.com/login/',ajax=True)
+        if login in res:
             return True
         else:
-            return False
+            raise NotLogged('Not authorized. Cant find "window.userIsAuthenticated = true" in response')
         
     
     def getBoards(self):
         url       = 'http://pinterest.com/pin/create/bookmarklet/'
-        res       = self.request(url,referrer='https://pinterest.com/')
+        res,headers,cookies = self.request(url,referrer='https://pinterest.com/')
         
-        res = re.findall(r'<li data="([^"]+)">[\s]*<span>([^<]+)</span>',res)
+        res = re.findall(r'<li(?:.*?)data-id="([^"]+)"(?:.*?)</div>([^<]+)</li>',res, re.I | re.M | re.U | re.S)
         boards = {}
         for idb,name in res:
-            boards[name.lower()] = idb
+            boards[unicode(name,'utf-8').lower().strip()] = idb
         self.boards = boards
         return boards
     
-    def createPin(self,board='',title='',desc='',media='',posturl='',tags=[]):
-        url       = 'http://pinterest.com/pin/create/bookmarklet/'
+    def createPin(self,board='',title='',media='',posturl='',tags=[]):
+        url       = 'http://pinterest.com/pin/create/bookmarklet/?media=%s&url=%s&description=%s' % (media,posturl,title)
         post_data = urllib.urlencode({
-            'caption': title,
-            'desc': title,
-            'board': board,
-            'media_url': media,
-            'url': posturl,
-            'buyable':'',
-            'tags':'',
-            'replies':'',
-            'via':'',
-            'csrfmiddlewaretoken':self.csrfmiddlewaretoken
+            'source_url':'/pin/create/bookmarklet/?media=%s&url=%s&description=%s' % (media,posturl,title),
+            'data':'{"options":{"board_id":"%s","description":"%s","link":"%s","share_facebook":false,"image_url":"%s","method":"bookmarklet","is_video":null},"context":{"app_version":"62fcc23","https_exp":false}}' % (board,title,posturl,media),
+            'module_path':'App()>PinBookmarklet()>PinCreate()>PinForm()>Button(class_name=repinSmall pinIt, text=Pin it, disabled=false, has_icon=true, show_text=false, type=submit, color=primary)'
         }) 
         try:
-            ref = "%s?%s" % (url,post_data)
-            post_data = "%s&form_url=/pin/create/bookmarklet/?%s" % (post_data,post_data)
-            res = self.request(url, post_data,referrer=ref)
-        except:
-            return False
+            res,header,query = self.request('http://www.pinterest.com/resource/PinResource/create/', post_data,referrer=url,ajax=True)
+        except Exception as e:
+            raise CantCreatePin(e)
         else:
-            if 'Your pin was pinned' in res:
+            if 'PinResource' in res:
                 return True
-            return False
+            raise CantCreatePin('Cant create pin. Cant find PinResource in response')
             
-    def request(self,url,post_data=None,referrer='http://google.com/'):
+    def request(self,url,post_data=None,referrer='http://google.com/',ajax=False):
         """Donwload url with urllib2.
         
            Return downloaded data
@@ -105,10 +92,16 @@ class Pinterest(object):
             ('Accept-Encoding', 'gzip,deflate'),
             ('Accept-Charset', 'ISO-8859-1,utf-8;q=0.7,*;q=0.7'),
             ('Keep-Alive', '3600'),
+            ('Host','www.pinterest.com'),
+            ('Origin','http://www.pinterest.com'),
             ('Connection', 'keep-alive'),
-            ('Referer', referrer)
+            ('Referer', referrer),
+            ('X-NEW-APP','1')
         ]
-        
+        if ajax:
+            opener.addheaders.append(('X-Requested-With','XMLHttpRequest'))
+        if self.csrfmiddlewaretoken:
+            opener.addheaders.append(('X-CSRFToken',self.csrfmiddlewaretoken))
         error_happen = False
         html = ''
         try:
@@ -123,7 +116,7 @@ class Pinterest(object):
             error_happen = e
             
         if error_happen:
-            return error_happen
+            return error_happen,{},{}
 
         headers = r.info()
         # If we get gzipped data the unzip it
@@ -139,24 +132,33 @@ class Pinterest(object):
             else:
                 html = html_unzipped
 
-        return html
+        cookies = {cookie.name:cookie.value for cookie in self.cookieJar}
+        self.csrfmiddlewaretoken = cookies['csrftoken']
+           
+        return html,headers,cookies
+         
             
 class DownloadTimeoutException(Exception):
+    pass
+    
+class NotLogged(Exception):
+    pass
+    
+class CantCreatePin(Exception):
     pass
     
     
 if __name__ == "__main__":
     p = Pinterest()
-    logged = p.login('someeamil@gmail.com','password')
-    if logged:
-        print 'logged in.'
-        boards = p.getBoards()
-        print boards
-        res = p.createPin(board=boards['art'],title='Anton Semenov | 30 Art Works',
-            desc='Anton Semenov | 30 Art Works',
-            media='http://1.bp.blogspot.com/-SfG0Ad5_UVo/UGxBfrBGugI/AAAAAAAAA54/o-glBuiX_3Q/s640/Black_dream_by_Gloom82.jpg',
-            posturl='http://30artworks.blogspot.com/2012/10/anton-semenov.html')
-        print 'pin created: %s' % res
+    p.login('test@test.com','123456')
+    boards = p.getBoards()
+    print boards
+    bid = boards['test']
+    res = p.createPin(board=bid,title='Anton Semenov | 30 Art Works',
+        media='http://1.bp.blogspot.com/-SfG0Ad5_UVo/UGxBfrBGugI/AAAAAAAAA54/o-glBuiX_3Q/s640/Black_dream_by_Gloom82.jpg',
+        posturl='http://30artworks.blogspot.com/2012/10/anton-semenov.html')
+
+    print 'pin created: %s' % res
     
     
     
