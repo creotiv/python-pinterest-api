@@ -187,7 +187,7 @@ if __name__ == "__main__":
                     posturl='http://30artworks.blogspot.com/'
                 )
 
-                 print 'pin created: %s' % res
+                print 'pin created: %s' % res
     except:
         print traceback.format_exc()
         time.sleep(30)
