@@ -180,27 +180,7 @@ class NotLogged(Exception):
 class CantCreatePin(Exception):
     pass
     
-    
-if __name__ == "__main__":
-    import traceback
-    try:
-        p = Pinterest()
-        p.login('sdfdsfsd@gmail.com','fefsd')
-        boards = p.getBoards()
-        for k,v in boards.iteritems():
-        
-            search = p.search("car boat")[:3]
-            for s in search:
-                res = p.createPin(board=v,title='30 Art Works',
-                    media=s['img'],
-                    posturl='http://30artworks.blogspot.com/'
-                )
 
-                print 'pin created: %s' % res
-    except:
-        print traceback.format_exc()
-    finally:
-        time.sleep(30)
     
     
     
