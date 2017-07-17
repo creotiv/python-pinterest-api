@@ -1,4 +1,5 @@
-Pinterest API for Python
+# Pinterest API for Python [DEPRECATED]
+This API was developed before Pinterest opened their official API, now it's not suppported. Please use official API https://developers.pinterest.com/ or fork this one and fix.
 
 Example of use:
 ```
